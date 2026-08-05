@@ -189,7 +189,7 @@
                 <div class="form-group"><label>保養日期</label><input type="date" id="mDate" class="form-control" required=""></div>
                 <div class="form-group">
                     <label>客戶名稱</label>
-                    <input list="customerList" id="mCustomer" class="form-control" required="" placeholder="請選擇或輸入客戶名稱" onblur="autoFillCustomerInfo(this.value)">
+                    <input list="customerList" id="mCustomer" class="form-control" required placeholder="請選擇或輸入客戶名稱" oninput="autoFillCustomerInfo(this.value)">
                     <datalist id="customerList"></datalist>
                 </div>
                 <div class="form-group">
@@ -339,13 +339,18 @@
         }
 
         function autoFillCustomerInfo(customerName) {
-            if (!customerName) return;
+            const itemInput = document.getElementById('mItem');
+            const freqInput = document.getElementById('mFreq');
+            if (!customerName) {
+                if (itemInput) itemInput.value = "靜電機保養";
+                return;
+            }
             const lastRecord = records.slice().reverse().find(r => r.customer.trim().toLowerCase() === customerName.trim().toLowerCase());
             if (lastRecord) {
-                const itemInput = document.getElementById('mItem');
-                const freqInput = document.getElementById('mFreq');
-                if (itemInput && !itemInput.value) itemInput.value = lastRecord.item;
-                if (freqInput && !freqInput.value) freqInput.value = lastRecord.freq;
+                if (itemInput) itemInput.value = lastRecord.item;
+                if (freqInput) freqInput.value = lastRecord.freq;
+            } else {
+                if (itemInput) itemInput.value = "靜電機保養"; // 如果沒有歷史紀錄，也預設帶入靜電機保養
             }
         }
 
@@ -523,10 +528,19 @@
 
         function switchTab(id, el) { document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active')); document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active')); document.getElementById(id).classList.add('active'); el.classList.add('active'); handleSearch(false); }
         function handleSearch(reset=true) { if(reset){currentPage=1; currentCustomerPage=1;} const t=document.getElementById('searchInput').value; renderMaintenanceTable(t); renderCustomersTable(t); renderHistoryTable(t); }
-        function openModal() { updateCustomerDatalist(); document.getElementById('modalTitle').innerText='新增登記保養'; document.getElementById('recordForm').reset(); document.getElementById('recordId').value=''; document.getElementById('mDate').value=new Date().toISOString().split('T')[0]; document.getElementById('recordModal').style.display='flex'; }
+        function openModal() { 
+            updateCustomerDatalist(); 
+            document.getElementById('modalTitle').innerText='新增登記保養'; 
+            document.getElementById('recordForm').reset(); 
+            document.getElementById('recordId').value=''; 
+            document.getElementById('mDate').value=new Date().toISOString().split('T')[0]; 
+            document.getElementById('mItem').value = "靜電機保養"; // 💡 預設帶入靜電機保養
+            document.getElementById('mFreq').value = 3; // 💡 預設頻率為 3 個月
+            document.getElementById('recordModal').style.display='flex'; 
+        }
         function closeModal() { document.getElementById('recordModal').style.display='none'; }
         
-        document.getElementById('recordForm').addEventListener('submit', (e) => { 
+        document.getElementById('recordForm').addEventListener('submit', async (e) => { 
             e.preventDefault(); 
             const id = document.getElementById('recordId').value; 
             const d = {
@@ -540,6 +554,19 @@
             }; 
             if(id){const idx=records.findIndex(r=>r.id===id); records[idx]=d;}else{records.push(d); currentPage=1; currentCustomerPage=1;} 
             updateCustomerList(); saveData(); document.getElementById('searchInput').value=''; renderAll(); closeModal(); 
+            
+            // 💡 儲存後自動在背景同步至 Google 雲端試算表！
+            try {
+                await fetch(API_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(records)
+                });
+                console.log("自動同步雲端成功");
+            } catch (error) {
+                console.error("自動同步雲端失敗", error);
+            }
         });
 
         function editRecord(id) { 
