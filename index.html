@@ -1,10 +1,9 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>詮晟餐飲設備內部專用固定保養時程提醒儀表板</title>
@@ -128,7 +127,7 @@
                 <button class="btn" onclick="openModal()"><i class="fa-solid fa-plus"></i> 新增登記保養</button>
                 <input type="file" id="csvFileInput" accept=".csv" onchange="importCSV(event)">
                 <button class="btn btn-outline" onclick="document.getElementById('csvFileInput').click()"><i class="fa-solid fa-file-import"></i> 匯入CSV</button>
-                <button class="btn btn-outline" onclick="exportCSV()"><i class="fa-solid fa-file-export"></i> 匯出CSV</button>
+                <button class="btn btn-outline" onclick="exportExcel()"><i class="fa-solid fa-file-export"></i> 匯出Excel</button>
                 <button class="btn btn-danger-outline" onclick="clearAllData()"><i class="fa-solid fa-trash-can"></i> 格式化清除</button>
                 <button class="btn btn-pack" onclick="exportHTML()"><i class="fa-solid fa-box-archive"></i> 儲存並打包網頁</button>
             </div>
@@ -211,7 +210,7 @@
         </div>
     </div>
 
-    <!-- 提醒通知視窗（含搜尋與過濾匯出） -->
+    <!-- 提醒通知視窗 -->
     <div id="reminderModal" class="modal" style="display: none;">
         <div class="modal-content large">
             <div class="modal-header">
@@ -229,7 +228,7 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline" onclick="closeReminderModal()">關閉</button>
-                <button type="button" class="btn" onclick="exportReminderCSV()"><i class="fa-solid fa-file-export"></i> 匯出篩選後名單</button>
+                <button type="button" class="btn" onclick="exportReminderExcel()"><i class="fa-solid fa-file-export"></i> 匯出篩選後名單</button>
             </div>
         </div>
     </div>
@@ -263,6 +262,7 @@
         window.onload = () => { loadTheme(); loadData(); };
 
         async function loadData() {
+            let cloudLoaded = false;
             try {
                 const response = await fetch(API_URL);
                 const data = await response.json();
@@ -277,25 +277,25 @@
                         remarks: r.remarks || ''
                     }));
                     updateCustomerList();
-                    renderAll();
-                    checkReminders(true);
-                    return;
+                    cloudLoaded = true;
                 }
             } catch (error) {
-                console.log("從雲端載入失敗，使用本機備份", error);
+                console.log("從雲端載入失敗", error);
             }
 
-            const savedRecords = localStorage.getItem('cc_records');
-            if (savedRecords !== null) {
-                records = JSON.parse(savedRecords);
-                customers = JSON.parse(localStorage.getItem('cc_customers') || '{}');
-            } else if (window.EMBEDDED_RECORDS && window.EMBEDDED_RECORDS.length > 0) {
-                records = window.EMBEDDED_RECORDS;
-                customers = window.EMBEDDED_CUSTOMERS || {};
-                saveData();
-            } else {
-                records = [];
-                customers = {};
+            if (!cloudLoaded) {
+                const savedRecords = localStorage.getItem('cc_records');
+                if (savedRecords !== null) {
+                    records = JSON.parse(savedRecords);
+                    customers = JSON.parse(localStorage.getItem('cc_customers') || '{}');
+                } else if (window.EMBEDDED_RECORDS && window.EMBEDDED_RECORDS.length > 0) {
+                    records = window.EMBEDDED_RECORDS;
+                    customers = window.EMBEDDED_CUSTOMERS || {};
+                    saveData();
+                } else {
+                    records = [];
+                    customers = {};
+                }
             }
             renderAll();
             checkReminders(true);
@@ -418,13 +418,22 @@
         
         function renderAll() { renderDashboard(); renderMaintenanceTable(); renderCustomersTable(); updateYearSelect(); renderHistoryTable(); }
         
+        // 💡 包含自動計算逾期與 30 天內提醒的儀表板邏輯
         function renderDashboard() {
             document.getElementById('count-total').innerText = records.length;
             let p = 0, o = 0, rCount = 0; 
             
             records.forEach(r => { 
-                if(r.status === '待處理') p++; 
-                if(r.status === '已逾期') o++; 
+                const nextDate = calculateNextDate(r.date, r.freq);
+                const daysDiff = calculateDaysDiff(nextDate);
+                
+                if (r.status === '已保養') {
+                    // 已保養不計入待處理與逾期
+                } else if (daysDiff < 0 || r.status === '已逾期') {
+                    o++; // 自動計入逾期
+                } else if (r.status === '待處理') {
+                    p++; 
+                }
             });
 
             const latestRecordsMap = {};
@@ -604,7 +613,8 @@
 
         function closeReminderModal() { document.getElementById('reminderModal').style.display = 'none'; }
 
-        function exportReminderCSV() {
+        // 💡 防亂碼的 Excel 匯出 (提醒清單)
+        function exportReminderExcel() {
             const searchInput = document.getElementById('reminderSearchInput');
             const keyword = searchInput ? searchInput.value.toLowerCase() : '';
             const exportData = currentReminderData.filter(r => 
@@ -612,13 +622,25 @@
             );
             if(exportData.length === 0) { alert('沒有資料可匯出！'); return; }
             
-            let c = "\uFEFF下次保養日,客戶名稱,保養項目,距離天數\n"; 
+            let html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
+            html += '<head><meta charset="UTF-8"></head><body>';
+            html += '<table border="1">';
+            html += '<tr style="background-color: #f0ad4e; color: white;"><th>下次保養日</th><th>客戶名稱</th><th>保養項目</th><th>距離天數</th></tr>';
+            
             exportData.forEach(r => {
                 const nextDate = calculateNextDate(r.date, r.freq);
                 const days = calculateDaysDiff(nextDate);
-                c += `"${nextDate}","${r.customer}","${r.item}","剩餘 ${days} 天"\n`;
+                html += `<tr><td>${nextDate.replace(/-/g, '/')}</td><td>${r.customer}</td><td>${r.item}</td><td>剩餘 ${days} 天</td></tr>`;
             });
-            downloadCSV(c, `外包商提醒名單_${new Date().toISOString().split('T')[0]}.csv`); 
+            html += '</table></body></html>';
+            
+            const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `外包商提醒名單_${new Date().toISOString().split('T')[0]}.xls`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link); 
         }
 
         function updateRecordFreq(id, newFreq) {
@@ -659,9 +681,47 @@
             r.readAsText(f);
         }
 
-        function exportCSV() { if(records.length===0) return; let c="\uFEFF保養日期,客戶名稱,保養項目,保養頻率(月),保養狀況,備註\n"; records.forEach(r=>c+=`"${r.date}","${r.customer}","${r.item}","${r.freq}","${r.status}","${r.remarks||''}"\n`); downloadCSV(c, `保養資料匯出_${new Date().toISOString().split('T')[0]}.csv`); }
-        function downloadCSV(c, n) { const b=new Blob([c], {type:'text/csv;charset=utf-8;'}); const l=document.createElement('a'); l.href=URL.createObjectURL(b); l.download=n; document.body.appendChild(l); l.click(); document.body.removeChild(l); }
+        // 💡 防亂碼的 Excel 匯出 (主清單)
+        function exportExcel() {
+            if (records.length === 0) { alert('沒有資料可匯出！'); return; }
+            let html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
+            html += '<head><meta charset="UTF-8"></head><body>';
+            html += '<table border="1">';
+            html += '<tr style="background-color: #B8906F; color: white;"><th>保養日期</th><th>客戶名稱</th><th>保養項目</th><th>保養頻率(月)</th><th>保養狀況</th><th>備註</th></tr>';
+            
+            records.forEach(r => {
+                html += `<tr><td>${r.date.replace(/-/g, '/')}</td><td>${r.customer}</td><td>${r.item}</td><td>${r.freq}</td><td>${r.status}</td><td>${r.remarks || ''}</td></tr>`;
+            });
+            html += '</table></body></html>';
+            
+            const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `保養資料匯出_${new Date().toISOString().split('T')[0]}.xls`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
         function exportHTML() { let timestamp=Date.now(); let recordsStr=JSON.stringify(records); let customersStr=JSON.stringify(customers); let currentTheme=localStorage.getItem('cc_theme')||'milktea'; let scriptContent=`\n        window.EMBEDDED_TIMESTAMP = ${timestamp};\n        window.EMBEDDED_RECORDS = ${recordsStr};\n        window.EMBEDDED_CUSTOMERS = ${customersStr};\n        window.EMBEDDED_THEME = '${currentTheme}';\n    `; let clone=document.documentElement.cloneNode(true); clone.querySelector('#embedded-data').textContent=scriptContent; const blob=new Blob(["<!DOCTYPE html>\n<html lang=\"zh-TW\">\n"+clone.innerHTML+"\n</html>"], {type:'text/html;charset=utf-8;'}); const link=document.createElement("a"); link.href=URL.createObjectURL(blob); link.download=`保養儀表板_${new Date().toISOString().split('T')[0]}.html`; link.click(); alert('打包完成！請將下載的檔案分享給同事。'); }
+
+          function updateOverdueStatuses() {
+            let changed = false;
+            records.forEach(r => {
+                if (r.status !== '已保養') {
+                    const nextDate = calculateNextDate(r.date, r.freq);
+                    const daysDiff = calculateDaysDiff(nextDate);
+                    // 如果下次保養日已經過去（天數 < 0），且目前還不是「已逾期」，就自動幫忙改過去！
+                    if (daysDiff < 0 && r.status !== '已逾期') {
+                        r.status = '已逾期';
+                        changed = true;
+                    }
+                }
+            });
+            if (changed) {
+                saveData(); // 自動儲存狀態變更
+            }
+        }
         
         function clearAllData() { 
             if(confirm('⚠️確定清除所有資料?')) { 
