@@ -10,6 +10,7 @@
     <title>詮晟餐飲設備內部專用固定保養時程提醒儀表板</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     
     <!-- 資料打包存放區 -->
     <script id="embedded-data">
@@ -91,6 +92,14 @@
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; z-index: 1000; }
         .modal-content { background: var(--white); padding: 30px; border-radius: 10px; width: 500px; max-width: 90%; box-shadow: 0 5px 15px rgba(0,0,0,0.3); max-height: 80vh; overflow-y: auto; }
         .modal-content.large { width: 800px; }
+        .modal-content.reminder-modal-content { width: 1050px; max-width: 94%; }
+        .reminder-table { table-layout: fixed; min-width: 900px; }
+        .reminder-table th:nth-child(1) { width: 130px; }
+        .reminder-table th:nth-child(2) { width: 220px; }
+        .reminder-table th:nth-child(3) { width: 170px; }
+        .reminder-table th:nth-child(4) { width: 110px; }
+        .reminder-table th:nth-child(5) { width: auto; }
+        .reminder-note { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
         .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 15px; margin-bottom: 15px; }
         .modal-header h2 { margin: 0; color: var(--primary-color); font-size: 20px; }
         .close-modal { cursor: pointer; font-size: 20px; color: #999; }
@@ -521,7 +530,7 @@
 
     <!-- 提醒通知視窗（含搜尋與過濾匯出） -->
     <div id="reminderModal" class="modal" style="display: none;">
-        <div class="modal-content large">
+        <div class="modal-content large reminder-modal-content">
             <div class="modal-header">
                 <h2><i class="fa-solid fa-bell" style="color:var(--warning)"></i> 下次保養提醒</h2>
                 <i class="fa-solid fa-xmark close-modal" onclick="closeReminderModal()"></i>
@@ -530,14 +539,14 @@
                 <input type="text" id="reminderSearchInput" class="search-box" placeholder="🔍 輸入保養項目或客戶過濾..." onkeyup="filterReminderTable()" style="width: 100%; box-sizing: border-box;">
             </div>
             <div style="max-height: 350px; overflow-y: auto;">
-                <table>
-                    <thead><tr><th>下次保養日</th><th>客戶名稱</th><th>保養項目</th><th>距離天數</th></tr></thead>
+                <table class="reminder-table">
+                    <thead><tr><th>下次保養日</th><th>客戶名稱</th><th>保養項目</th><th>距離天數</th><th>備註</th></tr></thead>
                     <tbody id="reminder-table-body"><tr><td style="color:var(--danger);font-weight:bold;">2026/08/05</td><td>特威茶葉-中央工廠</td><td>靜電機保養</td><td>剩餘 1 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/05</td><td>福得餐館</td><td>靜電機保養</td><td>剩餘 1 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/07</td><td>成真咖啡-台北永康店</td><td>靜電機保養</td><td>剩餘 3 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/09</td><td>成真咖啡-台南海安店</td><td>靜電機保養</td><td>剩餘 5 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/09</td><td>MOS-台南西門店</td><td>靜電機保養</td><td>剩餘 5 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/09</td><td>樂雅樂-台南西門店</td><td>靜電機保養</td><td>剩餘 5 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/12</td><td>串家物語-台南三井</td><td>靜電機保養</td><td>剩餘 8 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/13</td><td>成真咖啡-SOGO忠孝復興</td><td>靜電機保養</td><td>剩餘 9 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/13</td><td>成真咖啡-桃園藝文町店</td><td>靜電機保養</td><td>剩餘 9 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/21</td><td>NINI義大利餐廳新店裕隆城</td><td>靜電機保養</td><td>剩餘 17 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/21</td><td>天鍋宴-天町燒肉屋-大湖店</td><td>靜電機保養</td><td>剩餘 17 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/24</td><td>王品餐飲 西堤中和板南</td><td>靜電機保養</td><td>剩餘 20 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/25</td><td>天仁茶業 喫茶趣_高雄夢時代7F</td><td>靜電機保養</td><td>剩餘 21 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/25</td><td>SSAM韓式燒肉-吉林店</td><td>靜電機保養</td><td>剩餘 21 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/29</td><td>平祿壽司-台中五權店</td><td>靜電機保養</td><td>剩餘 25 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/08/31</td><td>叁酒弍沏-忠孝寓所</td><td>靜電機保養</td><td>剩餘 27 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/09/01</td><td>mamalili 仁愛店</td><td>靜電機保養</td><td>剩餘 28 天</td></tr><tr><td style="color:var(--danger);font-weight:bold;">2026/09/01</td><td>串家物語-台中港店</td><td>靜電機保養</td><td>剩餘 28 天</td></tr></tbody>
                 </table>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline" onclick="closeReminderModal()">關閉</button>
-                <button type="button" class="btn" onclick="exportReminderCSV()"><i class="fa-solid fa-file-export"></i> 匯出篩選後名單</button>
+                <button type="button" class="btn" onclick="exportReminderXLSX()"><i class="fa-solid fa-file-export"></i> 匯出篩選後名單 (.xlsx)</button>
             </div>
         </div>
     </div>
@@ -938,9 +947,15 @@
                 const nextDate = calculateNextDate(r.date, r.freq);
                 const days = calculateDaysDiff(nextDate);
                 let tr = document.createElement('tr');
-                tr.innerHTML = `<td style="color:var(--danger);font-weight:bold;">${nextDate.replace(/-/g, '/')}</td><td>${r.customer}</td><td>${r.item}</td><td>剩餘 ${days} 天</td>`;
+                tr.innerHTML = `<td style="color:var(--danger);font-weight:bold;">${escapeHtml(nextDate.replace(/-/g, '/'))}</td><td>${escapeHtml(r.customer)}</td><td>${escapeHtml(r.item)}</td><td>剩餘 ${days} 天</td><td class="reminder-note">${escapeHtml(r.remarks || '')}</td>`;
                 tbody.appendChild(tr);
             });
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>'"]/g, char => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+            })[char]);
         }
 
         function filterReminderTable() {
@@ -948,47 +963,41 @@
             if (!searchInput) return;
             const keyword = searchInput.value.toLowerCase();
             const filtered = currentReminderData.filter(r => 
-                r.item.toLowerCase().includes(keyword) || r.customer.toLowerCase().includes(keyword)
+                r.item.toLowerCase().includes(keyword) || r.customer.toLowerCase().includes(keyword) || (r.remarks || '').toLowerCase().includes(keyword)
             );
             renderReminderTable(filtered);
         }
 
         function closeReminderModal() { document.getElementById('reminderModal').style.display = 'none'; }
 
-        function exportReminderCSV() {
+        function exportReminderXLSX() {
             const searchInput = document.getElementById('reminderSearchInput');
             const keyword = searchInput ? searchInput.value.toLowerCase() : '';
             const exportData = currentReminderData.filter(r => 
-                r.item.toLowerCase().includes(keyword) || r.customer.toLowerCase().includes(keyword)
+                r.item.toLowerCase().includes(keyword) || r.customer.toLowerCase().includes(keyword) || (r.remarks || '').toLowerCase().includes(keyword)
             );
             if(exportData.length === 0) { alert('沒有資料可匯出！'); return; }
-            
-            // 使用 Excel 專屬的 XML 格式防止中文亂碼
-            let html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
-            html += '<head><meta charset="UTF-8"></head><body>';
-            html += '<table border="1">';
-            html += '<tr style="background-color: #f0ad4e; color: white;"><th>下次保養日</th><th>客戶名稱</th><th>保養項目</th><th>距離天數</th></tr>';
-            
-            exportData.forEach(r => {
+
+            if (typeof XLSX === 'undefined') { alert('Excel 匯出元件尚未載入，請重新整理網頁後再試一次。'); return; }
+
+            const rows = exportData.map(r => {
                 const nextDate = calculateNextDate(r.date, r.freq);
                 const days = calculateDaysDiff(nextDate);
-                html += `<tr>
-                    <td>${nextDate.replace(/-/g, '/')}</td>
-                    <td>${r.customer}</td>
-                    <td>${r.item}</td>
-                    <td>剩餘 ${days} 天</td>
-                </tr>`;
+                return {
+                    '下次保養日': nextDate.replace(/-/g, '/'),
+                    '客戶名稱': r.customer,
+                    '保養項目': r.item,
+                    '距離天數': `剩餘 ${days} 天`,
+                    '備註': r.remarks || ''
+                };
             });
-            
-            html += '</table></body></html>';
-            
-            const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = `外包商提醒名單_${new Date().toISOString().split('T')[0]}.xls`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link); 
+
+            const worksheet = XLSX.utils.json_to_sheet(rows);
+            worksheet['!cols'] = [{wch:14}, {wch:32}, {wch:22}, {wch:14}, {wch:50}];
+            worksheet['!autofilter'] = { ref: worksheet['!ref'] };
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, '下次保養提醒');
+            XLSX.writeFile(workbook, `下次保養提醒_${new Date().toISOString().split('T')[0]}.xlsx`, { compression: true });
         }
 
         async function updateRecordFreq(id, newFreq) {
