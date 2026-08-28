@@ -145,7 +145,7 @@
                 <button class="btn" onclick="openModal()"><i class="fa-solid fa-plus"></i> 新增登記保養</button>
                 <input type="file" id="csvFileInput" accept=".csv" onchange="importCSV(event)">
                 <button class="btn btn-outline" onclick="document.getElementById('csvFileInput').click()"><i class="fa-solid fa-file-import"></i> 匯入Excel</button>
-                <button class="btn btn-outline" onclick="exportCSV()"><i class="fa-solid fa-file-export"></i> 匯出Excel</button>
+                <button class="btn btn-outline" onclick="exportMaintenanceXLSX()"><i class="fa-solid fa-file-export"></i> 匯出Excel (.xlsx)</button>
                 <button class="btn btn-danger-outline" onclick="clearAllData()"><i class="fa-solid fa-trash-can"></i> 格式化清除</button>
                 <button class="btn btn-pack" onclick="exportHTML()"><i class="fa-solid fa-box-archive"></i> 下載離線備份</button>
             </div>
@@ -1037,35 +1037,25 @@
             r.readAsText(f);
         }
 
-        function exportCSV() {
+        function exportMaintenanceXLSX() {
             if (records.length === 0) { alert('沒有資料可匯出！'); return; }
-            
-            // 使用 Excel 專用的 XML 格式，讓 Excel 雙擊打開時能自動正確辨識 UTF-8 中文
-            let html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
-            html += '<head><meta charset="UTF-8"></head><body>';
-            html += '<table border="1">';
-            html += '<tr style="background-color: #B8906F; color: white;"><th>保養日期</th><th>客戶名稱</th><th>保養項目</th><th>保養頻率(月)</th><th>保養狀況</th><th>備註</th></tr>';
-            
-            records.forEach(r => {
-                html += `<tr>
-                    <td>${r.date.replace(/-/g, '/')}</td>
-                    <td>${r.customer}</td>
-                    <td>${r.item}</td>
-                    <td>${r.freq}</td>
-                    <td>${r.status}</td>
-                    <td>${r.remarks || ''}</td>
-                </tr>`;
-            });
-            
-            html += '</table></body></html>';
-            
-            const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = `保養資料匯出_${new Date().toISOString().split('T')[0]}.xls`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+
+            if (typeof XLSX === 'undefined') { alert('Excel 匯出元件尚未載入，請重新整理網頁後再試一次。'); return; }
+
+            const rows = records.map(r => ({
+                '保養日期': r.date.replace(/-/g, '/'),
+                '客戶名稱': r.customer,
+                '保養項目': r.item,
+                '保養頻率(月)': r.freq,
+                '保養狀況': r.status,
+                '備註': r.remarks || ''
+            }));
+            const worksheet = XLSX.utils.json_to_sheet(rows);
+            worksheet['!cols'] = [{wch:14}, {wch:34}, {wch:22}, {wch:16}, {wch:14}, {wch:50}];
+            worksheet['!autofilter'] = { ref: worksheet['!ref'] };
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, '保養資料');
+            XLSX.writeFile(workbook, `保養資料匯出_${new Date().toISOString().split('T')[0]}.xlsx`, { compression: true });
         }
         function downloadCSV(c, n) { const b=new Blob([c], {type:'text/csv;charset=utf-8;'}); const l=document.createElement('a'); l.href=URL.createObjectURL(b); l.download=n; document.body.appendChild(l); l.click(); document.body.removeChild(l); }
         function exportHTML() { let timestamp=Date.now(); let recordsStr=JSON.stringify(records); let customersStr=JSON.stringify(customers); let currentTheme=localStorage.getItem('cc_theme')||'milktea'; let scriptContent=`\n        window.EMBEDDED_TIMESTAMP = ${timestamp};\n        window.EMBEDDED_RECORDS = ${recordsStr};\n        window.EMBEDDED_CUSTOMERS = ${customersStr};\n        window.EMBEDDED_THEME = '${currentTheme}';\n    `; let clone=document.documentElement.cloneNode(true); clone.querySelector('#embedded-data').textContent=scriptContent; const blob=new Blob(["<!DOCTYPE html>\n<html lang=\"zh-TW\">\n"+clone.innerHTML+"\n</html>"], {type:'text/html;charset=utf-8;'}); const link=document.createElement("a"); link.href=URL.createObjectURL(blob); link.download=`保養儀表板_離線備份_${new Date().toISOString().split('T')[0]}.html`; link.click(); alert('離線備份已下載；正式共用資料仍以 Cloudflare 網頁為準。'); }
