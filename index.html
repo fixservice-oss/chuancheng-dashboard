@@ -572,17 +572,18 @@
         }
 
         const API_URL = '/api/data';
+        const VERSION_API_URL = '/api/version';
         let records = []; let customers = {}; let currentPage = 1; let currentCustomerPage = 1; const recordsPerPage = 15;
         let overdueFilterActive = false;
-        let currentReminderData = []; let serverVersion = -1; let syncTimer = null; let isSyncing = false;
+        let currentReminderData = []; let serverVersion = -1; let syncTimer = null; let isSyncing = false; let lastFullSyncDate = '';
 
         window.onload = async () => {
             loadTheme();
             await loadData({ initial: true });
             checkReminders(true);
-            syncTimer = setInterval(() => loadData({ silent: true }), 15000);
-            window.addEventListener('focus', () => loadData({ silent: true }));
-            document.addEventListener('visibilitychange', () => { if (!document.hidden) loadData({ silent: true }); });
+            syncTimer = setInterval(() => checkDataVersion({ silent: true }), 60000);
+            window.addEventListener('focus', () => checkDataVersion({ silent: true }));
+            document.addEventListener('visibilitychange', () => { if (!document.hidden) checkDataVersion({ silent: true }); });
         };
 
         function setSyncStatus(state, text) {
@@ -605,11 +606,22 @@
             return data;
         }
 
+        async function requestDataVersion() {
+            const response = await fetch(VERSION_API_URL, {
+                method: 'GET',
+                headers: { 'Cache-Control': 'no-cache' }
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || `版本檢查失敗 (${response.status})`);
+            return data;
+        }
+
         function applyServerData(data, forceRender = false) {
             const changed = forceRender || Number(data.version) !== serverVersion;
             records = Array.isArray(data.records) ? data.records : [];
             customers = data.customers && typeof data.customers === 'object' ? data.customers : {};
             serverVersion = Number(data.version || 0);
+            lastFullSyncDate = new Date().toLocaleDateString('en-CA');
             if (changed) renderAll();
             setSyncStatus('', `已同步 ${new Date().toLocaleTimeString('zh-TW', {hour:'2-digit', minute:'2-digit'})}`);
         }
@@ -640,6 +652,34 @@
             } finally {
                 isSyncing = false;
             }
+        }
+
+        async function checkDataVersion({ silent = true } = {}) {
+            if (isSyncing) return;
+
+            const today = new Date().toLocaleDateString('en-CA');
+            if (lastFullSyncDate && lastFullSyncDate !== today) {
+                await loadData({ silent });
+                return;
+            }
+
+            isSyncing = true;
+            let shouldReload = false;
+            if (!silent) setSyncStatus('syncing', '檢查更新中');
+            try {
+                const data = await requestDataVersion();
+                shouldReload = Number(data.version || 0) !== serverVersion;
+                if (!shouldReload) {
+                    setSyncStatus('', `已同步 ${new Date().toLocaleTimeString('zh-TW', {hour:'2-digit', minute:'2-digit'})}`);
+                }
+            } catch (error) {
+                console.error(error);
+                setSyncStatus('error', '版本檢查失敗');
+            } finally {
+                isSyncing = false;
+            }
+
+            if (shouldReload) await loadData({ silent: true });
         }
 
         async function persistData(payload, successMessage = '') {
