@@ -131,7 +131,7 @@
 
         <div class="toolbar">
             <div class="toolbar-group">
-                <input type="text" id="searchInput" class="search-box" placeholder="輸入客戶名稱搜尋..." onkeyup="handleSearch()">
+                <input type="text" id="searchInput" class="search-box" placeholder="輸入客戶名稱或保養項目搜尋..." onkeyup="handleSearch()">
             </div>
             <div class="toolbar-group">
                 <div class="theme-selector">
@@ -727,7 +727,13 @@
 
             let f = records.slice();
             if (overdueFilterActive) f = f.filter(r => r.status === '已逾期');
-            if (text) f = f.filter(r => r.customer.toLowerCase().includes(text.toLowerCase()));
+            if (text) {
+                const keyword = text.toLowerCase();
+                f = f.filter(r =>
+                    r.customer.toLowerCase().includes(keyword) ||
+                    r.item.toLowerCase().includes(keyword)
+                );
+            }
             f.sort((a,b) => new Date(b.date) - new Date(a.date));
             
             const totalItems = f.length;
@@ -887,7 +893,13 @@
             const selectedItem = document.getElementById('historyItemSelect').value;
 
             let f = records; 
-            if (text) f = f.filter(r => r.customer.toLowerCase().includes(text.toLowerCase()));
+            if (text) {
+                const keyword = text.toLowerCase();
+                f = f.filter(r =>
+                    r.customer.toLowerCase().includes(keyword) ||
+                    r.item.toLowerCase().includes(keyword)
+                );
+            }
             if (selectedYear !== 'all') f = f.filter(r => r.date && r.date.startsWith(selectedYear));
             if (selectedItem !== 'all') f = f.filter(r => r.item === selectedItem);
             
