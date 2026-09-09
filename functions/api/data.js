@@ -13,6 +13,17 @@ function normalizeDate(value) {
   return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
 }
 
+function calculateNextDate(dateValue, frequencyMonths) {
+  const date = normalizeDate(dateValue);
+  const frequency = Number(frequencyMonths);
+  if (!date || !Number.isFinite(frequency) || frequency <= 0) return "";
+
+  const [year, month, day] = date.split("-").map(Number);
+  const nextDate = new Date(Date.UTC(year, month - 1, day));
+  nextDate.setUTCDate(nextDate.getUTCDate() + Math.round(frequency * 30));
+  return nextDate.toISOString().slice(0, 10);
+}
+
 function cleanRecord(input) {
   const id = String(input?.id || "").trim();
   const date = normalizeDate(input?.date);
@@ -50,6 +61,11 @@ async function ensureSchema(db) {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS next_record_links (
+      source_id TEXT PRIMARY KEY,
+      next_record_id TEXT NOT NULL UNIQUE,
+      created_at INTEGER NOT NULL
+    )`),
     db.prepare("CREATE INDEX IF NOT EXISTS records_date_idx ON records(date)"),
     db.prepare("CREATE INDEX IF NOT EXISTS records_customer_idx ON records(customer)"),
   ]);
@@ -84,7 +100,9 @@ async function readAll(db) {
 async function upsertRecord(db, input) {
   const record = cleanRecord(input);
   const now = Date.now();
-  await db.batch([
+  const existing = await db.prepare("SELECT status FROM records WHERE id = ?1").bind(record.id).first();
+  const shouldCreateNext = record.status === "已保養" && existing?.status !== "已保養";
+  const statements = [
     db.prepare(`INSERT INTO records (id, date, customer, item, freq, status, remarks, updated_at)
       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
       ON CONFLICT(id) DO UPDATE SET date=excluded.date, customer=excluded.customer,
@@ -93,7 +111,24 @@ async function upsertRecord(db, input) {
       .bind(record.id, record.date, record.customer, record.item, record.freq, record.status, record.remarks, now),
     db.prepare(`INSERT INTO customers (name, status, updated_at) VALUES (?1, '正常營業', ?2)
       ON CONFLICT(name) DO NOTHING`).bind(record.customer, now),
-  ]);
+  ];
+
+  if (shouldCreateNext) {
+    const nextDate = calculateNextDate(record.date, record.freq);
+    const proposedNextId = crypto.randomUUID();
+    statements.push(
+      db.prepare(`INSERT OR IGNORE INTO next_record_links (source_id, next_record_id, created_at)
+        VALUES (?1, ?2, ?3)`).bind(record.id, proposedNextId, now),
+      db.prepare(`INSERT OR IGNORE INTO records
+        (id, date, customer, item, freq, status, remarks, updated_at)
+        SELECT next_record_id, ?2, ?3, ?4, ?5, '待處理', '', ?6
+          FROM next_record_links
+         WHERE source_id = ?1`)
+        .bind(record.id, nextDate, record.customer, record.item, record.freq, now),
+    );
+  }
+
+  await db.batch(statements);
   await bumpVersion(db);
 }
 
