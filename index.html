@@ -126,7 +126,7 @@
             <div class="card"><div class="card-icon"><i class="fa-solid fa-list"></i></div><div class="card-info"><h3>保養總筆數</h3><p id="count-total">773</p></div></div>
             <div class="card"><div class="card-icon"><i class="fa-solid fa-clock"></i></div><div class="card-info"><h3>待保養筆數</h3><p id="count-pending">14</p></div></div>
             <div id="overdue-filter-card" class="card card-filter" role="button" tabindex="0" aria-pressed="false" title="點擊只顯示已逾期紀錄" onclick="toggleOverdueFilter()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleOverdueFilter();}"><div class="card-icon"><i class="fa-solid fa-circle-exclamation" style="color:var(--danger)"></i></div><div class="card-info"><h3>已逾期筆數</h3><p id="count-overdue">0</p></div></div>
-            <div class="card"><div class="card-icon"><i class="fa-solid fa-bell" style="color:var(--warning)"></i></div><div class="card-info"><h3>待提醒筆數 (30天內)</h3><p id="count-remind">15</p></div></div>
+            <div class="card"><div class="card-icon"><i class="fa-solid fa-bell" style="color:var(--warning)"></i></div><div class="card-info"><h3>待提醒筆數</h3><p id="count-remind">15</p></div></div>
         </div>
 
         <div class="toolbar">
@@ -839,6 +839,20 @@
             return Array.from(latestByMaintenanceItem.values());
         }
 
+        function getReminderRecords() {
+            return getActionableRecords().filter(record => {
+                if (customers[record.customer] === '已歇業') return false;
+                const daysLeft = calculateDaysDiff(getExpectedMaintenanceDate(record));
+                return isScheduledRecord(record) || (daysLeft >= 0 && daysLeft <= 30);
+            });
+        }
+
+        function formatReminderDistance(days) {
+            if (days < 0) return `已逾期 ${Math.abs(days)} 天`;
+            if (days === 0) return '今天到期';
+            return `剩餘 ${days} 天`;
+        }
+
         function calculateDaysDiff(targetDateStr) { const today = new Date(); today.setHours(0,0,0,0); const target = parseLocalDate(targetDateStr); return Math.round((target - today) / (1000 * 60 * 60 * 24)); }
         
         function updateCustomerList() { records.forEach(r => { if (!customers[r.customer]) customers[r.customer] = '正常營業'; }); }
@@ -853,13 +867,8 @@
             actionableRecords.forEach(r => {
                 if (r.status === '待處理') p++;
                 if (r.status === '已逾期') o++;
-                if (customers[r.customer] !== '已歇業') {
-                    const d = calculateDaysDiff(getExpectedMaintenanceDate(r));
-                    if (d <= 30 && d >= 0) {
-                        rCount++;
-                    }
-                }
             });
+            rCount = getReminderRecords().length;
             
             document.getElementById('count-pending').innerText = p; 
             document.getElementById('count-overdue').innerText = o; 
@@ -990,12 +999,7 @@
         
         // 下次保養提醒只顯示尚未完成的預計／待處理紀錄；已保養紀錄保留在歷史資料中。
         function checkReminders(initial=false) {
-            currentReminderData = getActionableRecords().filter(r => {
-                if (customers[r.customer] === '已歇業') return false;
-                const nextDateStr = getExpectedMaintenanceDate(r);
-                const daysLeft = calculateDaysDiff(nextDateStr);
-                return daysLeft >= 0 && daysLeft <= 30;
-            });
+            currentReminderData = getReminderRecords();
 
             if(currentReminderData.length > 0) {
                 const searchInput = document.getElementById('reminderSearchInput');
@@ -1016,7 +1020,7 @@
                 const nextDate = getExpectedMaintenanceDate(r);
                 const days = calculateDaysDiff(nextDate);
                 let tr = document.createElement('tr');
-                tr.innerHTML = `<td style="color:var(--danger);font-weight:bold;">${escapeHtml(nextDate.replace(/-/g, '/'))}</td><td>${escapeHtml(r.customer)}</td><td>${escapeHtml(r.item)}</td><td>剩餘 ${days} 天</td><td class="reminder-note">${escapeHtml(r.remarks || '')}</td>`;
+                tr.innerHTML = `<td style="color:var(--danger);font-weight:bold;">${escapeHtml(nextDate.replace(/-/g, '/'))}</td><td>${escapeHtml(r.customer)}</td><td>${escapeHtml(r.item)}</td><td>${escapeHtml(formatReminderDistance(days))}</td><td class="reminder-note">${escapeHtml(r.remarks || '')}</td>`;
                 tbody.appendChild(tr);
             });
         }
@@ -1056,7 +1060,7 @@
                     '下次保養日': nextDate.replace(/-/g, '/'),
                     '客戶名稱': r.customer,
                     '保養項目': r.item,
-                    '距離天數': `剩餘 ${days} 天`,
+                    '距離天數': formatReminderDistance(days),
                     '備註': r.remarks || ''
                 };
             });
