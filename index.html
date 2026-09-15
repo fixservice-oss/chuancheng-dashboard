@@ -839,8 +839,33 @@
             return Array.from(latestByMaintenanceItem.values());
         }
 
+        function getReminderCandidates() {
+            const candidates = new Map();
+            records.forEach(record => {
+                const key = `${record.customer.trim().toLowerCase()}\u0000${record.item.trim().toLowerCase()}`;
+                if (!candidates.has(key)) candidates.set(key, { scheduled: null, legacy: null });
+                const group = candidates.get(key);
+
+                if (isScheduledRecord(record)) {
+                    if (record.status === '已保養') return;
+                    if (!group.scheduled || parseLocalDate(record.date) < parseLocalDate(group.scheduled.date)) {
+                        group.scheduled = record;
+                    }
+                    return;
+                }
+
+                if (!group.legacy || parseLocalDate(record.date) > parseLocalDate(group.legacy.date)) {
+                    group.legacy = record;
+                }
+            });
+
+            return Array.from(candidates.values())
+                .map(group => group.scheduled || group.legacy)
+                .filter(Boolean);
+        }
+
         function getReminderRecords() {
-            return getActionableRecords().filter(record => {
+            return getReminderCandidates().filter(record => {
                 if (customers[record.customer] === '已歇業') return false;
                 const daysLeft = calculateDaysDiff(getExpectedMaintenanceDate(record));
                 return isScheduledRecord(record) || (daysLeft >= 0 && daysLeft <= 30);
