@@ -3,6 +3,9 @@ const JSON_HEADERS = {
   "cache-control": "no-store, no-cache, must-revalidate",
 };
 
+const RECORD_TYPE_ACTUAL = "actual";
+const RECORD_TYPE_SCHEDULED = "scheduled";
+
 function reply(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
 }
@@ -35,7 +38,7 @@ function cleanRecord(input) {
   const remarks = String(input?.remarks || "").slice(0, 2000);
 
   if (!id || id.length > 100 || !date || !customer || customer.length > 300 || !item || item.length > 300 || !Number.isFinite(freq) || freq <= 0 || freq > 120) {
-    throw new Error("保養資料格式不正確");
+    throw new Error("輸入資料格式不正確");
   }
   return { id, date, customer, item, freq, status, remarks };
 }
@@ -66,10 +69,28 @@ async function ensureSchema(db) {
       next_record_id TEXT NOT NULL UNIQUE,
       created_at INTEGER NOT NULL
     )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS record_types (
+      record_id TEXT PRIMARY KEY,
+      record_type TEXT NOT NULL CHECK(record_type IN ('actual', 'scheduled')),
+      updated_at INTEGER NOT NULL
+    )`),
     db.prepare("CREATE INDEX IF NOT EXISTS records_date_idx ON records(date)"),
     db.prepare("CREATE INDEX IF NOT EXISTS records_customer_idx ON records(customer)"),
   ]);
-  await db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('version', '0')").run();
+
+  const now = Date.now();
+  await db.batch([
+    db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('version', '0')"),
+    // next_record_links 是辨識既有系統自動產生紀錄的唯一依據；保留 records.date 原值。
+    db.prepare(`INSERT OR IGNORE INTO record_types (record_id, record_type, updated_at)
+      SELECT l.next_record_id, 'scheduled', ?1
+        FROM next_record_links l
+        JOIN records r ON r.id = l.next_record_id
+       WHERE r.status <> '已保養'`).bind(now),
+    // 其餘既有紀錄（包含已完成紀錄）均為實際保養紀錄。
+    db.prepare(`INSERT OR IGNORE INTO record_types (record_id, record_type, updated_at)
+      SELECT id, 'actual', ?1 FROM records`).bind(now),
+  ]);
 }
 
 async function bumpVersion(db) {
@@ -81,7 +102,14 @@ async function updateOverdue(db) {
     UPDATE records
        SET status = '已逾期', updated_at = ?1
      WHERE status = '待處理'
-       AND date(date, '+' || CAST(ROUND(freq * 30) AS INTEGER) || ' days') < date('now', '+8 hours')
+       AND date(
+         CASE WHEN EXISTS (
+           SELECT 1 FROM record_types rt
+            WHERE rt.record_id = records.id AND rt.record_type = 'scheduled'
+         ) THEN records.date
+         ELSE date(records.date, '+' || CAST(ROUND(records.freq * 30) AS INTEGER) || ' days')
+         END
+       ) < date('now', '+8 hours')
   `).bind(Date.now()).run();
   if ((result.meta?.changes || 0) > 0) await bumpVersion(db);
 }
@@ -89,7 +117,11 @@ async function updateOverdue(db) {
 async function readAll(db) {
   await updateOverdue(db);
   const [recordResult, customerResult, versionResult] = await Promise.all([
-    db.prepare("SELECT id, date, customer, item, freq, status, remarks FROM records ORDER BY date DESC, updated_at DESC").all(),
+    db.prepare(`SELECT r.id, r.date, r.customer, r.item, r.freq, r.status, r.remarks,
+      CASE WHEN rt.record_type = 'scheduled' THEN '預計保養紀錄' ELSE '實際保養紀錄' END AS recordType
+      FROM records r
+      LEFT JOIN record_types rt ON rt.record_id = r.id
+      ORDER BY r.date DESC, r.updated_at DESC`).all(),
     db.prepare("SELECT name, status FROM customers ORDER BY name").all(),
     db.prepare("SELECT value FROM meta WHERE key = 'version'").first(),
   ]);
@@ -100,7 +132,9 @@ async function readAll(db) {
 async function upsertRecord(db, input) {
   const record = cleanRecord(input);
   const now = Date.now();
-  const existing = await db.prepare("SELECT status FROM records WHERE id = ?1").bind(record.id).first();
+  const existing = await db.prepare(`SELECT r.status, COALESCE(rt.record_type, 'actual') AS record_type
+    FROM records r LEFT JOIN record_types rt ON rt.record_id = r.id WHERE r.id = ?1`)
+    .bind(record.id).first();
   const shouldCreateNext = record.status === "已保養" && existing?.status !== "已保養";
   const statements = [
     db.prepare(`INSERT INTO records (id, date, customer, item, freq, status, remarks, updated_at)
@@ -111,6 +145,12 @@ async function upsertRecord(db, input) {
       .bind(record.id, record.date, record.customer, record.item, record.freq, record.status, record.remarks, now),
     db.prepare(`INSERT INTO customers (name, status, updated_at) VALUES (?1, '正常營業', ?2)
       ON CONFLICT(name) DO NOTHING`).bind(record.customer, now),
+    db.prepare(`INSERT INTO record_types (record_id, record_type, updated_at)
+      VALUES (?1, ?2, ?3)
+      ON CONFLICT(record_id) DO UPDATE SET
+        record_type = CASE WHEN ?4 = '已保養' THEN 'actual' ELSE record_types.record_type END,
+        updated_at = excluded.updated_at`)
+      .bind(record.id, existing?.record_type || RECORD_TYPE_ACTUAL, now, record.status),
   ];
 
   if (shouldCreateNext) {
@@ -125,6 +165,10 @@ async function upsertRecord(db, input) {
           FROM next_record_links
          WHERE source_id = ?1`)
         .bind(record.id, nextDate, record.customer, record.item, record.freq, now),
+      db.prepare(`INSERT OR IGNORE INTO record_types (record_id, record_type, updated_at)
+        SELECT next_record_id, 'scheduled', ?2
+          FROM next_record_links
+         WHERE source_id = ?1`).bind(record.id, now),
     );
   }
 
@@ -139,15 +183,21 @@ async function replaceAll(db, records, customers) {
   const cleaned = records.map(cleanRecord);
   const now = Date.now();
   await db.batch([
+    db.prepare("DELETE FROM next_record_links"),
+    db.prepare("DELETE FROM record_types"),
     db.prepare("DELETE FROM records"),
     db.prepare("DELETE FROM customers"),
   ]);
 
   const statements = [];
   for (const record of cleaned) {
-    statements.push(db.prepare(`INSERT INTO records (id, date, customer, item, freq, status, remarks, updated_at)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`)
-      .bind(record.id, record.date, record.customer, record.item, record.freq, record.status, record.remarks, now));
+    statements.push(
+      db.prepare(`INSERT INTO records (id, date, customer, item, freq, status, remarks, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`)
+        .bind(record.id, record.date, record.customer, record.item, record.freq, record.status, record.remarks, now),
+      db.prepare(`INSERT INTO record_types (record_id, record_type, updated_at) VALUES (?1, 'actual', ?2)`)
+        .bind(record.id, now),
+    );
   }
   const knownCustomers = new Set(cleaned.map((record) => record.customer));
   for (const [nameValue, statusValue] of Object.entries(customers)) {
@@ -171,7 +221,7 @@ export async function onRequest(context) {
   try {
     await ensureSchema(env.DB);
     if (request.method === "GET") return reply(await readAll(env.DB));
-    if (request.method !== "POST") return reply({ error: "不支援的操作" }, 405);
+    if (request.method !== "POST") return reply({ error: "不支援此方法" }, 405);
 
     const body = await request.json();
     switch (body.action) {
@@ -184,7 +234,10 @@ export async function onRequest(context) {
         await upsertRecord(env.DB, body.record);
         break;
       case "deleteRecord":
-        await env.DB.prepare("DELETE FROM records WHERE id = ?1").bind(String(body.id || "")).run();
+        await env.DB.batch([
+          env.DB.prepare("DELETE FROM record_types WHERE record_id = ?1").bind(String(body.id || "")),
+          env.DB.prepare("DELETE FROM records WHERE id = ?1").bind(String(body.id || "")),
+        ]);
         await bumpVersion(env.DB);
         break;
       case "setCustomer": {
@@ -201,7 +254,12 @@ export async function onRequest(context) {
         await replaceAll(env.DB, body.records, body.customers);
         break;
       case "clearAll":
-        await env.DB.batch([env.DB.prepare("DELETE FROM records"), env.DB.prepare("DELETE FROM customers")]);
+        await env.DB.batch([
+          env.DB.prepare("DELETE FROM next_record_links"),
+          env.DB.prepare("DELETE FROM record_types"),
+          env.DB.prepare("DELETE FROM records"),
+          env.DB.prepare("DELETE FROM customers"),
+        ]);
         await bumpVersion(env.DB);
         break;
       default:
@@ -209,6 +267,6 @@ export async function onRequest(context) {
     }
     return reply(await readAll(env.DB));
   } catch (error) {
-    return reply({ error: error instanceof Error ? error.message : "伺服器發生錯誤" }, 400);
+    return reply({ error: error instanceof Error ? error.message : "資料處理失敗" }, 400);
   }
 }
