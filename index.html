@@ -726,7 +726,10 @@
             const text = (filterText !== undefined && filterText !== '') ? filterText : (searchInput ? searchInput.value : '');
 
             let f = records.slice();
-            if (overdueFilterActive) f = f.filter(r => r.status === '已逾期');
+            if (overdueFilterActive) {
+                const overdueIds = new Set(getActionableRecords().filter(r => r.status === '已逾期').map(r => r.id));
+                f = f.filter(r => overdueIds.has(r.id));
+            }
             if (text) {
                 const keyword = text.toLowerCase();
                 f = f.filter(r =>
@@ -754,7 +757,7 @@
                                style="width: 60px; padding: 4px; border: 1px solid #ccc; border-radius: 4px; font-family: inherit;" 
                                onchange="updateRecordFreq('${r.id}', this.value)" title="直接修改頻率"> 月
                     </td>
-                    <td>${calculateNextDate(r.date, r.freq).replace(/-/g, '/')}</td>
+                    <td>${getExpectedMaintenanceDate(r).replace(/-/g, '/')}</td>
                     <td>
                         <select class="status-select" onchange="changeRecordStatus('${r.id}', this.value)">
                             <option value="待處理" ${r.status==='待處理'?'selected':''}>待處理</option>
@@ -803,6 +806,39 @@
             return formatLocalDate(date);
         }
 
+        function isScheduledRecord(record) {
+            return record?.recordType === '預計保養紀錄';
+        }
+
+        function getExpectedMaintenanceDate(record) {
+            return isScheduledRecord(record) ? record.date : calculateNextDate(record.date, record.freq);
+        }
+
+        function getActionableRecords() {
+            const latestByMaintenanceItem = new Map();
+            records.forEach(record => {
+                if (!['待處理', '已逾期'].includes(record.status)) return;
+                const key = `${record.customer.trim().toLowerCase()}\u0000${record.item.trim().toLowerCase()}`;
+                const current = latestByMaintenanceItem.get(key);
+                if (!current) {
+                    latestByMaintenanceItem.set(key, record);
+                    return;
+                }
+
+                if (isScheduledRecord(record) !== isScheduledRecord(current)) {
+                    if (isScheduledRecord(record)) latestByMaintenanceItem.set(key, record);
+                    return;
+                }
+
+                const recordDate = parseLocalDate(getExpectedMaintenanceDate(record));
+                const currentDate = parseLocalDate(getExpectedMaintenanceDate(current));
+                if (isScheduledRecord(record) ? recordDate < currentDate : recordDate > currentDate) {
+                    latestByMaintenanceItem.set(key, record);
+                }
+            });
+            return Array.from(latestByMaintenanceItem.values());
+        }
+
         function calculateDaysDiff(targetDateStr) { const today = new Date(); today.setHours(0,0,0,0); const target = parseLocalDate(targetDateStr); return Math.round((target - today) / (1000 * 60 * 60 * 24)); }
         
         function updateCustomerList() { records.forEach(r => { if (!customers[r.customer]) customers[r.customer] = '正常營業'; }); }
@@ -811,24 +847,14 @@
         
         function renderDashboard() {
             document.getElementById('count-total').innerText = records.length;
-            let p = 0, o = 0, rCount = 0; 
-            
-            records.forEach(r => { 
-                if(r.status === '待處理') p++; 
-                if(r.status === '已逾期') o++; 
-            });
+            let p = 0, o = 0, rCount = 0;
+            const actionableRecords = getActionableRecords();
 
-            // 💡 同步使用「每個客戶的最新紀錄」來計算 30 天內待提醒筆數
-            const latestRecordsMap = {};
-            records.forEach(r => {
-                if (!latestRecordsMap[r.customer] || new Date(r.date) > new Date(latestRecordsMap[r.customer].date)) {
-                    latestRecordsMap[r.customer] = r;
-                }
-            });
-
-            Object.values(latestRecordsMap).forEach(r => {
+            actionableRecords.forEach(r => {
+                if (r.status === '待處理') p++;
+                if (r.status === '已逾期') o++;
                 if (customers[r.customer] !== '已歇業') {
-                    let d = calculateDaysDiff(calculateNextDate(r.date, r.freq));
+                    const d = calculateDaysDiff(getExpectedMaintenanceDate(r));
                     if (d <= 30 && d >= 0) {
                         rCount++;
                     }
@@ -962,20 +988,11 @@
         async function changeRecordStatus(id, s) { const record=records.find(r=>r.id===id); if(record){ await persistData({ action: 'upsertRecord', record: {...record, status:s} }); } }
         async function toggleCustomerStatus(n) { const s=customers[n]; const ns=s==='正常營業'?'已歇業':'正常營業'; if(confirm(`將「${n}」變更為「${ns}」嗎?`)) await persistData({ action: 'setCustomer', name:n, status:ns }); }
         
-        // 💡 提醒視窗相關完整函數
+        // 下次保養提醒只顯示尚未完成的預計／待處理紀錄；已保養紀錄保留在歷史資料中。
         function checkReminders(initial=false) {
-            // 💡 核心邏輯：找出每個客戶「最新的一筆保養紀錄」
-            const latestRecordsMap = {};
-            records.forEach(r => {
-                if (!latestRecordsMap[r.customer] || new Date(r.date) > new Date(latestRecordsMap[r.customer].date)) {
-                    latestRecordsMap[r.customer] = r;
-                }
-            });
-
-            // 💡 只針對每個客戶的「最新紀錄」來判斷 30 天內提醒
-            currentReminderData = Object.values(latestRecordsMap).filter(r => {
+            currentReminderData = getActionableRecords().filter(r => {
                 if (customers[r.customer] === '已歇業') return false;
-                const nextDateStr = calculateNextDate(r.date, r.freq);
+                const nextDateStr = getExpectedMaintenanceDate(r);
                 const daysLeft = calculateDaysDiff(nextDateStr);
                 return daysLeft >= 0 && daysLeft <= 30;
             });
@@ -994,9 +1011,9 @@
             tbody.innerHTML = '';
             
             data.sort((a, b) => {
-                return calculateDaysDiff(calculateNextDate(a.date, a.freq)) - calculateDaysDiff(calculateNextDate(b.date, b.freq));
+                return calculateDaysDiff(getExpectedMaintenanceDate(a)) - calculateDaysDiff(getExpectedMaintenanceDate(b));
             }).forEach(r => {
-                const nextDate = calculateNextDate(r.date, r.freq);
+                const nextDate = getExpectedMaintenanceDate(r);
                 const days = calculateDaysDiff(nextDate);
                 let tr = document.createElement('tr');
                 tr.innerHTML = `<td style="color:var(--danger);font-weight:bold;">${escapeHtml(nextDate.replace(/-/g, '/'))}</td><td>${escapeHtml(r.customer)}</td><td>${escapeHtml(r.item)}</td><td>剩餘 ${days} 天</td><td class="reminder-note">${escapeHtml(r.remarks || '')}</td>`;
@@ -1033,7 +1050,7 @@
             if (typeof XLSX === 'undefined') { alert('Excel 匯出元件尚未載入，請重新整理網頁後再試一次。'); return; }
 
             const rows = exportData.map(r => {
-                const nextDate = calculateNextDate(r.date, r.freq);
+                const nextDate = getExpectedMaintenanceDate(r);
                 const days = calculateDaysDiff(nextDate);
                 return {
                     '下次保養日': nextDate.replace(/-/g, '/'),
@@ -1096,6 +1113,8 @@
 
             const rows = records.map(r => ({
                 '保養日期': r.date.replace(/-/g, '/'),
+                '紀錄類型': r.recordType || '實際保養紀錄',
+                '預計保養日': getExpectedMaintenanceDate(r).replace(/-/g, '/'),
                 '客戶名稱': r.customer,
                 '保養項目': r.item,
                 '保養頻率(月)': r.freq,
@@ -1103,7 +1122,7 @@
                 '備註': r.remarks || ''
             }));
             const worksheet = XLSX.utils.json_to_sheet(rows);
-            worksheet['!cols'] = [{wch:14}, {wch:34}, {wch:22}, {wch:16}, {wch:14}, {wch:50}];
+            worksheet['!cols'] = [{wch:14}, {wch:18}, {wch:14}, {wch:34}, {wch:22}, {wch:16}, {wch:14}, {wch:50}];
             worksheet['!autofilter'] = { ref: worksheet['!ref'] };
             const workbook = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(workbook, worksheet, '保養資料');
